@@ -1,0 +1,31 @@
+.budget-item .panel-body {
+    padding: 8px;
+}
+
+.budget-item .description {
+    font-size: 20px;
+    font-weight: bold;
+    line-height: 1;
+}
+
+.budget-item .amount {
+    text-align: right;
+    font-size: 16px;
+}
+
+.budget-item .due-date {
+    font-weight: bold;
+}
+
+.budget-item .budget-item-actions {
+    text-align: right;
+}
+
+.budget-item .budget-item-actions .mark-paid {
+    margin-right: 10px;
+    cursor: pointer;
+} 
+
+.budget-item .budget-item-actions .remove-item {
+    cursor: pointer;
+}
