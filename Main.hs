@@ -23,6 +23,7 @@ import Control.Monad.IO.Class
 import qualified GHCJS.Types    as T
 import qualified GHCJS.Foreign  as F
 import qualified Data.JSString  as J
+
 -- FFI
 foreign import javascript unsafe "confirm($1)" confirmJS :: T.JSString -> IO (Bool)
 
@@ -33,6 +34,13 @@ data BudgetItem = BudgetItem {
     ,dueDate :: Day
 }
     deriving (Generic, Show, Eq)
+
+instance Ord BudgetItem where 
+    compare (BudgetItem {budgetItemId = id1, dueDate = dueDate1 }) (BudgetItem { budgetItemId = id2, dueDate = dueDate2}) =
+        case compare dueDate1 dueDate2 of
+            EQ -> compare id1 id2
+            LT -> LT
+            GT -> GT
 
 instance FromJSON BudgetItem where 
     parseJSON = withObject "BudgetItem" $ \v -> BudgetItem
@@ -66,31 +74,42 @@ main = mainWidget $ do
     loadEvt <- getPostBuild
     divClass "container" $ do
         divClass "col-sm-4" $ do
-            rec
-                let getUpcomingItemsUrl = const "http://localhost:3000/upcomingItems?paid=false&deleted=false" <$> loadEvt
-                itemsEvt <- getUpcomingItems getUpcomingItemsUrl
-                itemsDyn <- holdDyn [] $ leftmost [itemsEvt]
-                upcomingItemActionEvt <- upcomingItemsWidget itemsEvt itemsDyn
-                let onlyMarkedItemsEvt = ffilter ffilterFunc upcomingItemActionEvt
-                let removedItemsEvt = ffilter (not . ffilterFunc) upcomingItemActionEvt
-                removedItemsConfirmationEvt <- ffilter isJust <$> confirmEvent (const "Are you sure?") removedItemsEvt
-                let removedAndConfirmedItemsEvt = fromJust <$> removedItemsConfirmationEvt
-                budgetItemToRemoveEvt <- performRequestForUpcomingItemAction $ leftmost [removedAndConfirmedItemsEvt, onlyMarkedItemsEvt]
-                let itemsToRemoveEvt = filterItemsToRemove <$> attachPromptlyDyn itemsDyn budgetItemToRemoveEvt
-                blahDyn <- holdDyn [] $ traceEvent "Remove" itemsToRemoveEvt
-                display blahDyn
-                return ()
+            let getUpcomingItemsUrl = const "http://localhost:3000/upcomingItems?paid=false&deleted=false" <$> loadEvt
+            itemsEvt <- getUpcomingItems getUpcomingItemsUrl
+            let mapEvt = fromList . fmap (\a -> (a, Just a)) . sort <$> itemsEvt
+            loadingIndicatorWidget itemsEvt
+            upcomingItemsWidget mapEvt
             return ()
         divClass "col-sm-4" blank
-        divClass "col-sm-4" blank  
+        divClass "col-sm-4" blank 
+
+loadingIndicatorWidget :: (MonadWidget t m) => Event t [BudgetItem] -> m ()
+loadingIndicatorWidget itemsEvt = do
+    el "h3" $ text "Upcoming Items"
+    loadingIndicatorDyn <- toggle True itemsEvt >>= (return . fmap renderLoading)
+    dyn loadingIndicatorDyn
+    return ()
+
+upcomingItemsWidget :: (MonadWidget t m) => Event t (Map BudgetItem (Maybe BudgetItem)) -> m ()
+upcomingItemsWidget mapEvt = do
+    rec
+        listMapDyn <- listHoldWithKey Data.Map.empty (leftmost [mapEvt, itemsToRemoveEvt]) upcomingItemWidget
+        let upcomingItemActionEvt = switchPromptlyDyn $ leftmost <$> fmap snd <$> Data.Map.toList <$> listMapDyn
+        let onlyMarkedItemsEvt = ffilter ffilterFunc upcomingItemActionEvt
+        let removedItemsEvt = ffilter (not . ffilterFunc) upcomingItemActionEvt
+        removedItemsConfirmationEvt <- ffilter isJust <$> confirmEvent (const "Are you sure?") removedItemsEvt
+        let removedAndConfirmedItemsEvt = fromJust <$> removedItemsConfirmationEvt
+        budgetItemToRemoveEvt <- performRequestForUpcomingItemAction $ leftmost [removedAndConfirmedItemsEvt, onlyMarkedItemsEvt]
+        let itemsToRemoveEvt = filterItemsToRemove <$> budgetItemToRemoveEvt 
+    return ()
 
 ffilterFunc :: UpcomingItemAction -> Bool
 ffilterFunc (MarkItemPaid _) = True
 ffilterFunc (RemoveItem _) = False    
 
-filterItemsToRemove :: ([BudgetItem], Maybe BudgetItem) -> [BudgetItem]
-filterItemsToRemove (bs, Nothing) = bs 
-filterItemsToRemove (bs, Just b) = Data.List.filter (/= b) bs
+filterItemsToRemove :: Maybe BudgetItem -> Map BudgetItem (Maybe BudgetItem)
+filterItemsToRemove Nothing = Data.Map.empty
+filterItemsToRemove (Just b) = Data.Map.singleton b Nothing
 
 performRequestForUpcomingItemAction ::(MonadWidget t m) => Event t UpcomingItemAction -> m (Event t (Maybe BudgetItem))
 performRequestForUpcomingItemAction upcomingItemActionEvt = do
@@ -119,24 +138,9 @@ getUpcomingItems urlEvt = do
                         case result of
                             Just bis -> bis
                             Nothing  -> []
-        
-upcomingItemsWidget :: (MonadWidget t m) => Event t [BudgetItem] -> Dynamic t [BudgetItem] -> m (Event t UpcomingItemAction)
-upcomingItemsWidget itemsEvt itemsDyn = do
-    el "h3" $ text "Upcoming Items"
-    loadingIndicatorDyn <- toggle True itemsEvt >>= (return . fmap renderLoading)
-    dyn loadingIndicatorDyn
-    upcomingItemEvt <- upcomingItemsListWidget itemsDyn
-    return upcomingItemEvt
 
-
-upcomingItemsListWidget :: (MonadWidget t m) => Dynamic t [BudgetItem] -> m (Event t UpcomingItemAction)
-upcomingItemsListWidget itemsDyn = do
-    itemsRenderedDyn <- simpleList itemsDyn upcomingItemWidget
-    return $ switchPromptlyDyn $ fmap leftmost itemsRenderedDyn
-
-upcomingItemWidget :: (MonadWidget t m) => Dynamic t BudgetItem -> m (Event t UpcomingItemAction)
-upcomingItemWidget budgetItemDyn = do
-    budgetItem@(BudgetItem id description amount dueDate) <- sample . current $ budgetItemDyn
+upcomingItemWidget :: (MonadWidget t m) => BudgetItem -> BudgetItem -> m (Event t UpcomingItemAction)
+upcomingItemWidget _ budgetItem@(BudgetItem id description amount dueDate) = do
     divClass "panel panel-default budget-item" $ do
         divClass "panel-body" $ do
             divClass "row" $ do
